@@ -1239,6 +1239,12 @@ type NakamaModule interface {
 
 	GetSatori() Satori
 	GetFleetManager() FleetManager
+
+	// VM methods for JavaScript execution
+	CreateVM(vmID string) error
+	VMLoadScript(vmID, script string) error
+	VMCallFunction(vmID, functionName string, args ...interface{}) (interface{}, error)
+	VMDestroy(vmID string) error
 }
 
 /*
