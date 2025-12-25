@@ -65,6 +65,8 @@ type RuntimeGoNakamaModule struct {
 	satori               runtime.Satori
 	fleetManager         runtime.FleetManager
 	storageIndex         StorageIndex
+	vmInstances          map[string]*JavaScriptVM
+	vmLock               sync.RWMutex
 }
 
 func NewRuntimeGoNakamaModule(logger *zap.Logger, db *sql.DB, protojsonMarshaler *protojson.MarshalOptions, config Config, socialClient *social.Client, leaderboardCache LeaderboardCache, leaderboardRankCache LeaderboardRankCache, leaderboardScheduler LeaderboardScheduler, sessionRegistry SessionRegistry, sessionCache SessionCache, statusRegistry StatusRegistry, matchRegistry MatchRegistry, partyRegistry PartyRegistry, tracker Tracker, metrics Metrics, streamManager StreamManager, router MessageRouter, storageIndex StorageIndex, satoriClient runtime.Satori) *RuntimeGoNakamaModule {
@@ -90,7 +92,8 @@ func NewRuntimeGoNakamaModule(logger *zap.Logger, db *sql.DB, protojsonMarshaler
 
 		node: config.GetName(),
 
-		satori: satoriClient,
+		satori:      satoriClient,
+		vmInstances: make(map[string]*JavaScriptVM),
 	}
 }
 
@@ -4485,4 +4488,103 @@ func (n *RuntimeGoNakamaModule) GetSatori() runtime.Satori {
 // @return fleetManager(runtime.FleetManager) The Fleet Manager client.
 func (n *RuntimeGoNakamaModule) GetFleetManager() runtime.FleetManager {
 	return n.fleetManager
+}
+
+// @group vm
+// @summary Create a new JavaScript VM instance.
+// @param vmID(type=string) Unique identifier for the VM instance.
+// @return error(error) An optional error value if an error occurred.
+func (n *RuntimeGoNakamaModule) CreateVM(vmID string) error {
+	if vmID == "" {
+		return errors.New("vmID cannot be empty")
+	}
+
+	n.vmLock.Lock()
+	defer n.vmLock.Unlock()
+
+	// Check if VM already exists
+	if _, exists := n.vmInstances[vmID]; exists {
+		return fmt.Errorf("VM with ID '%s' already exists", vmID)
+	}
+
+	// Create new VM instance
+	vm := NewJavaScriptVM(vmID, n.logger)
+	n.vmInstances[vmID] = vm
+
+	n.logger.Info("JavaScript VM created", zap.String("vmID", vmID))
+	return nil
+}
+
+// @group vm
+// @summary Load a JavaScript script into a VM instance.
+// @param vmID(type=string) The VM instance identifier.
+// @param script(type=string) The JavaScript script to load.
+// @return error(error) An optional error value if an error occurred.
+func (n *RuntimeGoNakamaModule) VMLoadScript(vmID, script string) error {
+	if vmID == "" {
+		return errors.New("vmID cannot be empty")
+	}
+	if script == "" {
+		return errors.New("script cannot be empty")
+	}
+
+	n.vmLock.RLock()
+	vm, exists := n.vmInstances[vmID]
+	n.vmLock.RUnlock()
+
+	if !exists {
+		return fmt.Errorf("VM with ID '%s' not found", vmID)
+	}
+
+	return vm.LoadScript(script)
+}
+
+// @group vm
+// @summary Call a JavaScript function in a VM instance.
+// @param vmID(type=string) The VM instance identifier.
+// @param functionName(type=string) The name of the function to call.
+// @param args(type=...interface{}) Variable arguments to pass to the function.
+// @return result(interface{}) The result of the function call.
+// @return error(error) An optional error value if an error occurred.
+func (n *RuntimeGoNakamaModule) VMCallFunction(vmID, functionName string, args ...interface{}) (interface{}, error) {
+	if vmID == "" {
+		return nil, errors.New("vmID cannot be empty")
+	}
+	if functionName == "" {
+		return nil, errors.New("functionName cannot be empty")
+	}
+
+	n.vmLock.RLock()
+	vm, exists := n.vmInstances[vmID]
+	n.vmLock.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("VM with ID '%s' not found", vmID)
+	}
+
+	return vm.CallFunction(functionName, args...)
+}
+
+// @group vm
+// @summary Destroy a VM instance and free its resources.
+// @param vmID(type=string) The VM instance identifier.
+// @return error(error) An optional error value if an error occurred.
+func (n *RuntimeGoNakamaModule) VMDestroy(vmID string) error {
+	if vmID == "" {
+		return errors.New("vmID cannot be empty")
+	}
+
+	n.vmLock.Lock()
+	defer n.vmLock.Unlock()
+
+	vm, exists := n.vmInstances[vmID]
+	if !exists {
+		return fmt.Errorf("VM with ID '%s' not found", vmID)
+	}
+
+	vm.Destroy()
+	delete(n.vmInstances, vmID)
+
+	n.logger.Info("JavaScript VM destroyed", zap.String("vmID", vmID))
+	return nil
 }
